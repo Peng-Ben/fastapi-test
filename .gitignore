@@ -1,0 +1,5 @@
+.env
+*.pem
+*.private-key
+LogPulse-HR
+castrelai-0113.2026-01-13.private-key

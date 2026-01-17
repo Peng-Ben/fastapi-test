@@ -1,0 +1,161 @@
+name: deploy-ec2
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      ENVIRONMENT: Production
+      DEPLOY_REF: ${{ github.ref_name }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Checkout (for SHA)
+        uses: actions/checkout@v4
+
+      - name: Prepare Python deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyjwt requests
+
+      - name: Create deployment
+        id: create_deployment
+        env:
+          APP_ID: ${{ secrets.GH_APP_ID }}
+          APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+        run: |
+          python3 - << 'PY'
+          import jwt, time, requests, os
+          app_id=os.environ["APP_ID"]
+          inst_id=os.environ["APP_INSTALLATION_ID"]
+          private_key=os.environ["APP_PRIVATE_KEY"].replace('\\n','\n')
+          payload={"iat":int(time.time())-60,"exp":int(time.time())+540,"iss":app_id}
+          token=jwt.encode(payload, private_key, algorithm="RS256")
+          headers={"Authorization":f"Bearer {token}","Accept":"application/vnd.github+json"}
+          r=requests.post(f"https://api.github.com/app/installations/{inst_id}/access_tokens", headers=headers)
+          r.raise_for_status()
+          access_token=r.json()["token"]
+          repo=os.environ["REPO"]
+          ref=os.environ["DEPLOY_REF"]
+          headers={"Authorization":f"token {access_token}","Accept":"application/vnd.github+json"}
+          dep=requests.post(
+            f"https://api.github.com/repos/{repo}/deployments",
+            headers=headers,
+            json={
+              "ref": ref,
+              "environment": os.environ["ENVIRONMENT"],
+              "auto_merge": False,
+              "required_contexts": []
+            }
+          )
+          dep.raise_for_status()
+          dep_id=dep.json()["id"]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"deployment_id={dep_id}\n")
+          PY
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /opt/logpulse-hr || git clone https://github.com/${{ github.repository }}.git /opt/logpulse-hr
+            cd /opt/logpulse-hr
+            git fetch --all
+            git reset --hard origin/main
+            docker compose up -d --build
+
+      - name: Health check
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            for i in {1..10}; do
+              if curl -fsS http://127.0.0.1:8000/ > /dev/null; then
+                echo "Health check passed"
+                exit 0
+              fi
+              echo "Waiting for service..."
+              sleep 3
+            done
+            echo "Health check failed"
+            exit 1
+
+      - name: Mark deployment success
+        if: ${{ success() }}
+        env:
+          APP_ID: ${{ secrets.GH_APP_ID }}
+          APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          DEPLOYMENT_ID: ${{ steps.create_deployment.outputs.deployment_id }}
+        run: |
+          python3 - << 'PY'
+          import jwt, time, requests, os
+          app_id=os.environ["APP_ID"]
+          inst_id=os.environ["APP_INSTALLATION_ID"]
+          private_key=os.environ["APP_PRIVATE_KEY"].replace('\\n','\n')
+          payload={"iat":int(time.time())-60,"exp":int(time.time())+540,"iss":app_id}
+          token=jwt.encode(payload, private_key, algorithm="RS256")
+          headers={"Authorization":f"Bearer {token}","Accept":"application/vnd.github+json"}
+          r=requests.post(f"https://api.github.com/app/installations/{inst_id}/access_tokens", headers=headers)
+          r.raise_for_status()
+          access_token=r.json()["token"]
+          repo=os.environ["REPO"]
+          dep_id=os.environ["DEPLOYMENT_ID"]
+          headers={"Authorization":f"token {access_token}","Accept":"application/vnd.github+json"}
+          requests.post(
+            f"https://api.github.com/repos/{repo}/deployments/{dep_id}/statuses",
+            headers=headers,
+            json={
+              "state":"success",
+              "environment":os.environ["ENVIRONMENT"],
+              "description":"Deployment has completed",
+              "target_url": os.environ["RUN_URL"],
+              "log_url": os.environ["RUN_URL"]
+            }
+          ).raise_for_status()
+          PY
+
+      - name: Mark deployment failure
+        if: ${{ failure() }}
+        env:
+          APP_ID: ${{ secrets.GH_APP_ID }}
+          APP_INSTALLATION_ID: ${{ secrets.GH_APP_INSTALLATION_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          DEPLOYMENT_ID: ${{ steps.create_deployment.outputs.deployment_id }}
+        run: |
+          python3 - << 'PY'
+          import jwt, time, requests, os
+          app_id=os.environ["APP_ID"]
+          inst_id=os.environ["APP_INSTALLATION_ID"]
+          private_key=os.environ["APP_PRIVATE_KEY"].replace('\\n','\n')
+          payload={"iat":int(time.time())-60,"exp":int(time.time())+540,"iss":app_id}
+          token=jwt.encode(payload, private_key, algorithm="RS256")
+          headers={"Authorization":f"Bearer {token}","Accept":"application/vnd.github+json"}
+          r=requests.post(f"https://api.github.com/app/installations/{inst_id}/access_tokens", headers=headers)
+          r.raise_for_status()
+          access_token=r.json()["token"]
+          repo=os.environ["REPO"]
+          dep_id=os.environ["DEPLOYMENT_ID"]
+          headers={"Authorization":f"token {access_token}","Accept":"application/vnd.github+json"}
+          requests.post(
+            f"https://api.github.com/repos/{repo}/deployments/{dep_id}/statuses",
+            headers=headers,
+            json={
+              "state":"failure",
+              "environment":os.environ["ENVIRONMENT"],
+              "description":"Deployment failed",
+              "target_url": os.environ["RUN_URL"],
+              "log_url": os.environ["RUN_URL"]
+            }
+          ).raise_for_status()
+          PY
