@@ -66,10 +66,17 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            cd /opt/logpulse-hr || git clone https://github.com/${{ github.repository }}.git /opt/logpulse-hr
+            if [ ! -d /opt/logpulse-hr/.git ]; then
+              rm -rf /opt/logpulse-hr
+              git clone https://github.com/${{ github.repository }}.git /opt/logpulse-hr
+            fi
             cd /opt/logpulse-hr
             git fetch --all
             git reset --hard origin/main
+            if [ ! -f docker-compose.yml ] && [ ! -f compose.yml ]; then
+              echo "docker compose config missing"
+              exit 1
+            fi
             docker compose up -d --build
 
       - name: Health check
