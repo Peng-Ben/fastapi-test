@@ -67,7 +67,9 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             if [ ! -d /opt/logpulse-hr/.git ]; then
-              rm -rf /opt/logpulse-hr
+              sudo rm -rf /opt/logpulse-hr
+              sudo mkdir -p /opt/logpulse-hr
+              sudo chown ubuntu:ubuntu /opt/logpulse-hr
               git clone https://github.com/${{ github.repository }}.git /opt/logpulse-hr
             fi
             cd /opt/logpulse-hr
