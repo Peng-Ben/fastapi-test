@@ -11,6 +11,8 @@ services:
       - "8000:8000"
     depends_on:
       - otel-collector
+    networks:
+      - logpulse
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.93.0
@@ -24,6 +26,8 @@ services:
       - "9464:9464"
     depends_on:
       - elasticsearch
+    networks:
+      - logpulse
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
@@ -36,6 +40,8 @@ services:
       - "127.0.0.1:9200:9200"
     volumes:
       - es_data:/usr/share/elasticsearch/data
+    networks:
+      - logpulse
 
   prometheus:
     image: prom/prometheus:v2.49.1
@@ -46,6 +52,8 @@ services:
       - "127.0.0.1:9090:9090"
     depends_on:
       - otel-collector
+    networks:
+      - logpulse
 
   nginx:
     image: nginx:1.25-alpine
@@ -59,6 +67,11 @@ services:
     depends_on:
       - elasticsearch
       - prometheus
+    networks:
+      - logpulse
 
 volumes:
   es_data:
+
+networks:
+  logpulse:
