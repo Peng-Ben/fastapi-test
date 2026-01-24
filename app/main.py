@@ -31,6 +31,12 @@ attendance_checkins = meter.create_counter(
 payroll_runs = meter.create_counter(
     "payroll_runs_total", description="Payroll runs"
 )
+leave_requests = meter.create_counter(
+    "leave_requests_total", description="Leave requests created"
+)
+leave_approvals = meter.create_counter(
+    "leave_approvals_total", description="Leave approvals"
+)
 
 
 class DepartmentCreate(BaseModel):
@@ -51,6 +57,18 @@ class PayrollRunPayload(BaseModel):
     month: str
 
 
+class LeaveRequestCreate(BaseModel):
+    employee_id: int
+    leave_type: str
+    days: int
+    reason: str | None = None
+
+
+class LeaveDecisionPayload(BaseModel):
+    approved: bool
+    approver: str
+
+
 def create_app() -> FastAPI:
     setup_logging()
     setup_telemetry(SERVICE_NAME)
@@ -61,8 +79,10 @@ def create_app() -> FastAPI:
     app.state.departments = {}
     app.state.employees = {}
     app.state.attendance = []
+    app.state.leave_requests = {}
     app.state.next_department_id = 1
     app.state.next_employee_id = 1000
+    app.state.next_leave_id = 1
 
     @app.middleware("http")
     async def metrics_middleware(request: Request, call_next):
@@ -150,6 +170,47 @@ def create_app() -> FastAPI:
         payroll_runs.add(1, {"month": payload.month})
         logger.info("payroll run month=%s employees=%s", payload.month, len(app.state.employees))
         return {"status": "ok", "month": payload.month, "employees": len(app.state.employees)}
+
+    @app.post("/leave/requests")
+    async def create_leave_request(payload: LeaveRequestCreate) -> dict[str, int | str]:
+        if payload.employee_id not in app.state.employees:
+            raise HTTPException(status_code=404, detail="employee not found")
+        if payload.days <= 0:
+            raise HTTPException(status_code=400, detail="invalid leave days")
+        leave_type = payload.leave_type.strip().lower()
+        if leave_type not in {"annual", "sick", "personal"}:
+            raise HTTPException(status_code=400, detail="invalid leave type")
+        leave_id = app.state.next_leave_id
+        app.state.next_leave_id += 1
+        record = {
+            "id": leave_id,
+            "employee_id": payload.employee_id,
+            "leave_type": leave_type,
+            "days": payload.days,
+            "reason": payload.reason,
+            "status": "pending",
+            "approver": None,
+            "created_at": time.time(),
+        }
+        app.state.leave_requests[leave_id] = record
+        leave_requests.add(1, {"leave_type": leave_type})
+        logger.info("leave request created id=%s employee_id=%s type=%s", leave_id, payload.employee_id, leave_type)
+        return record
+
+    @app.post("/leave/requests/{leave_id}/decision")
+    async def decide_leave(leave_id: int, payload: LeaveDecisionPayload) -> dict[str, int | str]:
+        record = app.state.leave_requests.get(leave_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="leave request not found")
+        if record["status"] != "pending":
+            raise HTTPException(status_code=409, detail="leave request already decided")
+        status = "approved" if payload.approved else "rejected"
+        record["status"] = status
+        record["approver"] = payload.approver
+        record["decided_at"] = time.time()
+        leave_approvals.add(1, {"status": status})
+        logger.info("leave request %s id=%s approver=%s", status, leave_id, payload.approver)
+        return record
 
     @app.on_event("startup")
     async def start_simulation() -> None:

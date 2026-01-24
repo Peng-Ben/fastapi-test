@@ -49,3 +49,27 @@ def test_attendance_invalid_status() -> None:
 def test_payroll_invalid_month() -> None:
     response = client.post("/payroll/run", json={"month": "2026/01"})
     assert response.status_code == 400
+
+
+def test_leave_request_and_decision() -> None:
+    dept = client.post("/departments", json={"name": "Finance"})
+    employee = client.post(
+        "/employees",
+        json={"name": "Eve", "department_id": dept.json()["id"], "title": "Analyst"},
+    )
+    leave = client.post(
+        "/leave/requests",
+        json={
+            "employee_id": employee.json()["id"],
+            "leave_type": "annual",
+            "days": 2,
+            "reason": "travel",
+        },
+    )
+    assert leave.status_code == 200
+    leave_id = leave.json()["id"]
+    decision = client.post(
+        f"/leave/requests/{leave_id}/decision",
+        json={"approved": True, "approver": "manager_1"},
+    )
+    assert decision.status_code == 200

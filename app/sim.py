@@ -34,7 +34,14 @@ class Simulator:
         self._task = None
 
     async def _run(self) -> None:
-        actions = ["create_department", "create_employee", "attendance", "payroll"]
+        actions = [
+            "create_department",
+            "create_employee",
+            "attendance",
+            "payroll",
+            "leave_request",
+            "leave_decision",
+        ]
         async with httpx.AsyncClient(timeout=5.0) as client:
             while True:
                 action = random.choice(actions)
@@ -78,6 +85,35 @@ class Simulator:
             employee_id = random.choice(self._employees)
             await client.post(
                 f"{self.base_url}/employees/{employee_id}/attendance", json=payload
+            )
+            return
+
+        if action == "leave_request":
+            if not self._employees:
+                return
+            payload = {
+                "employee_id": random.choice(self._employees),
+                "leave_type": random.choice(["annual", "sick", "personal"]),
+                "days": random.randint(1, 5),
+                "reason": random.choice(["family", "travel", "medical", "rest"]),
+            }
+            response = await client.post(f"{self.base_url}/leave/requests", json=payload)
+            if response.status_code == 200:
+                leave_id = response.json().get("id")
+                if isinstance(leave_id, int):
+                    setattr(self, "_last_leave_id", leave_id)
+            return
+
+        if action == "leave_decision":
+            leave_id = getattr(self, "_last_leave_id", None)
+            if not leave_id:
+                return
+            payload = {
+                "approved": random.choice([True, False]),
+                "approver": random.choice(["hr_lead", "manager_1"]),
+            }
+            await client.post(
+                f"{self.base_url}/leave/requests/{leave_id}/decision", json=payload
             )
             return
 
