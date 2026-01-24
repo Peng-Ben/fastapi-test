@@ -97,3 +97,18 @@ def test_performance_review_flow() -> None:
         json={"final_rating": "A", "reviewer": "manager_1"},
     )
     assert decision.status_code == 200
+
+
+def test_department_transfer() -> None:
+    dept1 = client.post("/departments", json={"name": "Ops"})
+    dept2 = client.post("/departments", json={"name": "Support"})
+    employee = client.post(
+        "/employees",
+        json={"name": "Liam", "department_id": dept1.json()["id"], "title": "Agent"},
+    )
+    transfer = client.post(
+        f"/employees/{employee.json()['id']}/transfer",
+        json={"department_id": dept2.json()["id"], "reason": "reorg"},
+    )
+    assert transfer.status_code == 200
+    assert transfer.json()["department_id"] == dept2.json()["id"]

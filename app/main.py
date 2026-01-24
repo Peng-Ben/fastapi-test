@@ -87,6 +87,11 @@ class ReviewDecisionPayload(BaseModel):
     reviewer: str
 
 
+class DepartmentTransferPayload(BaseModel):
+    department_id: int
+    reason: str | None = None
+
+
 def create_app() -> FastAPI:
     setup_logging()
     setup_telemetry(SERVICE_NAME)
@@ -166,6 +171,28 @@ def create_app() -> FastAPI:
         employee = app.state.employees.get(employee_id)
         if not employee:
             raise HTTPException(status_code=404, detail="employee not found")
+        return employee
+
+    @app.post("/employees/{employee_id}/transfer")
+    async def transfer_employee(
+        employee_id: int, payload: DepartmentTransferPayload
+    ) -> dict[str, int | str]:
+        employee = app.state.employees.get(employee_id)
+        if not employee:
+            raise HTTPException(status_code=404, detail="employee not found")
+        if payload.department_id not in app.state.departments:
+            raise HTTPException(status_code=404, detail="department not found")
+        if employee["department_id"] == payload.department_id:
+            raise HTTPException(status_code=409, detail="already in department")
+        old_department = employee["department_id"]
+        employee["department_id"] = payload.department_id
+        logger.info(
+            "department transfer employee_id=%s from=%s to=%s reason=%s",
+            employee_id,
+            old_department,
+            payload.department_id,
+            payload.reason or "",
+        )
         return employee
 
     @app.post("/employees/{employee_id}/attendance")
