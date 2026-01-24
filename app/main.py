@@ -64,6 +64,12 @@ offboarding_cases = meter.create_counter(
 offboarding_steps = meter.create_counter(
     "offboarding_steps_total", description="Offboarding steps completed"
 )
+training_enrollments = meter.create_counter(
+    "training_enrollments_total", description="Training enrollments"
+)
+training_completions = meter.create_counter(
+    "training_completions_total", description="Training completions"
+)
 
 
 class DepartmentCreate(BaseModel):
@@ -167,6 +173,22 @@ class OffboardingFinalizePayload(BaseModel):
     hr_reviewer: str
 
 
+class TrainingCreatePayload(BaseModel):
+    name: str
+    capacity: int
+    trainer: str
+
+
+class TrainingEnrollPayload(BaseModel):
+    employee_id: int
+    status: str | None = None
+
+
+class TrainingCompletePayload(BaseModel):
+    employee_id: int
+    score: int
+
+
 def create_app() -> FastAPI:
     setup_logging()
     setup_telemetry(SERVICE_NAME)
@@ -182,6 +204,7 @@ def create_app() -> FastAPI:
     app.state.salary_adjustments = {}
     app.state.onboarding_cases = {}
     app.state.offboarding_cases = {}
+    app.state.trainings = {}
     app.state.next_department_id = 1
     app.state.next_employee_id = 1000
     app.state.next_leave_id = 1
@@ -189,6 +212,7 @@ def create_app() -> FastAPI:
     app.state.next_salary_id = 1
     app.state.next_onboarding_id = 1
     app.state.next_offboarding_id = 1
+    app.state.next_training_id = 1
 
     @app.middleware("http")
     async def metrics_middleware(request: Request, call_next):
@@ -546,6 +570,73 @@ def create_app() -> FastAPI:
             payload.hr_reviewer,
         )
         return record
+
+    @app.post("/trainings")
+    async def create_training(payload: TrainingCreatePayload) -> dict[str, int | str]:
+        if not payload.name.strip():
+            raise HTTPException(status_code=400, detail="invalid training name")
+        if payload.capacity <= 0:
+            raise HTTPException(status_code=400, detail="invalid capacity")
+        training_id = app.state.next_training_id
+        app.state.next_training_id += 1
+        record = {
+            "id": training_id,
+            "name": payload.name,
+            "capacity": payload.capacity,
+            "trainer": payload.trainer,
+            "enrolled": [],
+            "completed": [],
+            "created_at": time.time(),
+        }
+        app.state.trainings[training_id] = record
+        logger.info("training created id=%s name=%s", training_id, payload.name)
+        return record
+
+    @app.post("/trainings/{training_id}/enroll")
+    async def enroll_training(
+        training_id: int, payload: TrainingEnrollPayload
+    ) -> dict[str, int | str | list]:
+        training = app.state.trainings.get(training_id)
+        if not training:
+            raise HTTPException(status_code=404, detail="training not found")
+        if payload.employee_id not in app.state.employees:
+            raise HTTPException(status_code=404, detail="employee not found")
+        if payload.employee_id in training["enrolled"]:
+            raise HTTPException(status_code=409, detail="already enrolled")
+        if len(training["enrolled"]) >= training["capacity"]:
+            raise HTTPException(status_code=409, detail="training is full")
+        status = (payload.status or "registered").strip().lower()
+        training["enrolled"].append(payload.employee_id)
+        training_enrollments.add(1, {"training": training["name"], "status": status})
+        logger.info(
+            "training enrolled training_id=%s employee_id=%s",
+            training_id,
+            payload.employee_id,
+        )
+        return training
+
+    @app.post("/trainings/{training_id}/complete")
+    async def complete_training(
+        training_id: int, payload: TrainingCompletePayload
+    ) -> dict[str, int | str | list]:
+        training = app.state.trainings.get(training_id)
+        if not training:
+            raise HTTPException(status_code=404, detail="training not found")
+        if payload.employee_id not in training["enrolled"]:
+            raise HTTPException(status_code=409, detail="not enrolled")
+        if payload.score < 0 or payload.score > 100:
+            raise HTTPException(status_code=400, detail="invalid score")
+        if payload.employee_id in training["completed"]:
+            raise HTTPException(status_code=409, detail="already completed")
+        training["completed"].append(payload.employee_id)
+        training_completions.add(1, {"training": training["name"]})
+        logger.info(
+            "training completed training_id=%s employee_id=%s score=%s",
+            training_id,
+            payload.employee_id,
+            payload.score,
+        )
+        return training
 
     @app.post("/employees/{employee_id}/attendance")
     async def checkin(employee_id: int, payload: AttendancePayload) -> dict[str, str]:

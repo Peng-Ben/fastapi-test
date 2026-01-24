@@ -53,6 +53,9 @@ class Simulator:
             "offboarding_case",
             "offboarding_step",
             "offboarding_finalize",
+            "training_create",
+            "training_enroll",
+            "training_complete",
         ]
         async with httpx.AsyncClient(timeout=5.0) as client:
             while True:
@@ -309,6 +312,45 @@ class Simulator:
             payload = {"hr_reviewer": random.choice(["hr_lead", "hr_ops"])}
             await client.post(
                 f"{self.base_url}/offboarding/cases/{case_id}/finalize", json=payload
+            )
+            return
+
+        if action == "training_create":
+            payload = {
+                "name": random.choice(["Security 101", "Onboarding Basics", "Sales Bootcamp"]),
+                "capacity": random.randint(5, 10),
+                "trainer": random.choice(["trainer_a", "trainer_b"]),
+            }
+            response = await client.post(f"{self.base_url}/trainings", json=payload)
+            if response.status_code == 200:
+                training_id = response.json().get("id")
+                if isinstance(training_id, int):
+                    setattr(self, "_last_training_id", training_id)
+            return
+
+        if action == "training_enroll":
+            training_id = getattr(self, "_last_training_id", None)
+            if not training_id or not self._employees:
+                return
+            payload = {
+                "employee_id": random.choice(self._employees),
+                "status": random.choice(["registered", "confirmed"]),
+            }
+            await client.post(
+                f"{self.base_url}/trainings/{training_id}/enroll", json=payload
+            )
+            return
+
+        if action == "training_complete":
+            training_id = getattr(self, "_last_training_id", None)
+            if not training_id or not self._employees:
+                return
+            payload = {
+                "employee_id": random.choice(self._employees),
+                "score": random.randint(60, 100),
+            }
+            await client.post(
+                f"{self.base_url}/trainings/{training_id}/complete", json=payload
             )
             return
 
