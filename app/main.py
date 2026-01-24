@@ -49,6 +49,9 @@ asset_retirements = meter.create_counter(
 satisfaction_surveys = meter.create_counter(
     "satisfaction_surveys_total", description="Satisfaction surveys submitted"
 )
+health_declarations = meter.create_counter(
+    "health_declarations_total", description="Health declarations submitted"
+)
 payroll_runs = meter.create_counter(
     "payroll_runs_total", description="Payroll runs"
 )
@@ -293,6 +296,14 @@ class SatisfactionSurveyPayload(BaseModel):
     category: str | None = None
 
 
+class HealthDeclarationPayload(BaseModel):
+    employee_id: int
+    temperature: float
+    symptoms: list[str] = []
+    risk_level: str
+    note: str | None = None
+
+
 def create_app() -> FastAPI:
     setup_logging()
     setup_telemetry(SERVICE_NAME)
@@ -306,6 +317,7 @@ def create_app() -> FastAPI:
     app.state.attendance_anomalies = {}
     app.state.assets = {}
     app.state.satisfaction_surveys = []
+    app.state.health_declarations = []
     app.state.leave_requests = {}
     app.state.travel_requests = {}
     app.state.performance_reviews = {}
@@ -1063,6 +1075,35 @@ def create_app() -> FastAPI:
             payload.employee_id,
             payload.score,
             category,
+        )
+        return {"status": "ok"}
+
+    @app.post("/health/declarations")
+    async def submit_health_declaration(
+        payload: HealthDeclarationPayload,
+    ) -> dict[str, int | str]:
+        if payload.employee_id not in app.state.employees:
+            raise HTTPException(status_code=404, detail="employee not found")
+        if payload.temperature < 34 or payload.temperature > 42:
+            raise HTTPException(status_code=400, detail="invalid temperature")
+        risk = payload.risk_level.strip().lower()
+        if risk not in {"low", "medium", "high"}:
+            raise HTTPException(status_code=400, detail="invalid risk level")
+        record = {
+            "employee_id": payload.employee_id,
+            "temperature": payload.temperature,
+            "symptoms": payload.symptoms,
+            "risk_level": risk,
+            "note": payload.note,
+            "created_at": time.time(),
+        }
+        app.state.health_declarations.append(record)
+        health_declarations.add(1, {"risk_level": risk})
+        logger.info(
+            "health declaration employee_id=%s temp=%.1f risk=%s",
+            payload.employee_id,
+            payload.temperature,
+            risk,
         )
         return {"status": "ok"}
 

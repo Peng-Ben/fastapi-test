@@ -377,3 +377,22 @@ def test_satisfaction_survey() -> None:
         },
     )
     assert survey.status_code == 200
+
+
+def test_health_declaration() -> None:
+    dept = client.post("/departments", json={"name": "Health"})
+    employee = client.post(
+        "/employees",
+        json={"name": "Vera", "department_id": dept.json()["id"], "title": "Nurse"},
+    )
+    declaration = client.post(
+        "/health/declarations",
+        json={
+            "employee_id": employee.json()["id"],
+            "temperature": 36.8,
+            "symptoms": ["cough"],
+            "risk_level": "low",
+            "note": "ok",
+        },
+    )
+    assert declaration.status_code == 200

@@ -46,6 +46,7 @@ class Simulator:
             "asset_return",
             "asset_retire",
             "satisfaction_survey",
+            "health_declaration",
             "payroll",
             "leave_request",
             "leave_decision",
@@ -203,6 +204,19 @@ class Simulator:
                 "category": random.choice(["worklife", "benefits", "culture"]),
             }
             await client.post(f"{self.base_url}/surveys/satisfaction", json=payload)
+            return
+
+        if action == "health_declaration":
+            if not self._employees:
+                return
+            payload = {
+                "employee_id": random.choice(self._employees),
+                "temperature": round(random.uniform(36.0, 38.5), 1),
+                "symptoms": random.choice([[], ["cough"], ["fatigue"]]),
+                "risk_level": random.choice(["low", "medium", "high"]),
+                "note": random.choice(["ok", "monitor", "see doctor"]),
+            }
+            await client.post(f"{self.base_url}/health/declarations", json=payload)
             return
 
         if action == "leave_request":
