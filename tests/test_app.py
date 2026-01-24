@@ -74,6 +74,12 @@ def test_leave_request_and_decision() -> None:
     )
     assert decision.status_code == 200
 
+    review = client.post(
+        f"/leave/requests/{leave_id}/review",
+        json={"verified": True, "reviewer": "hr_ops"},
+    )
+    assert review.status_code == 200
+
 
 def test_performance_review_flow() -> None:
     dept = client.post("/departments", json={"name": "Sales"})
@@ -265,3 +271,32 @@ def test_training_complete_requires_exam() -> None:
         json={"employee_id": employee.json()["id"], "score": 80},
     )
     assert complete.status_code == 400
+
+
+def test_travel_request_flow() -> None:
+    dept = client.post("/departments", json={"name": "Field"})
+    employee = client.post(
+        "/employees",
+        json={"name": "Paul", "department_id": dept.json()["id"], "title": "SE"},
+    )
+    request = client.post(
+        "/travel/requests",
+        json={
+            "employee_id": employee.json()["id"],
+            "destination": "Tokyo",
+            "days": 3,
+            "reason": "conference",
+        },
+    )
+    assert request.status_code == 200
+    request_id = request.json()["id"]
+    decision = client.post(
+        f"/travel/requests/{request_id}/decision",
+        json={"approved": True, "approver": "manager_1"},
+    )
+    assert decision.status_code == 200
+    review = client.post(
+        f"/travel/requests/{request_id}/review",
+        json={"verified": True, "reviewer": "finance_1"},
+    )
+    assert review.status_code == 200

@@ -41,6 +41,7 @@ class Simulator:
             "payroll",
             "leave_request",
             "leave_decision",
+            "leave_review",
             "review_create",
             "review_decision",
             "department_transfer",
@@ -57,6 +58,9 @@ class Simulator:
             "training_enroll",
             "training_exam",
             "training_complete",
+            "travel_request",
+            "travel_decision",
+            "travel_review",
         ]
         async with httpx.AsyncClient(timeout=5.0) as client:
             while True:
@@ -130,6 +134,19 @@ class Simulator:
             }
             await client.post(
                 f"{self.base_url}/leave/requests/{leave_id}/decision", json=payload
+            )
+            return
+
+        if action == "leave_review":
+            leave_id = getattr(self, "_last_leave_id", None)
+            if not leave_id:
+                return
+            payload = {
+                "verified": random.choice([True, False]),
+                "reviewer": random.choice(["hr_ops", "hr_lead"]),
+            }
+            await client.post(
+                f"{self.base_url}/leave/requests/{leave_id}/review", json=payload
             )
             return
 
@@ -369,6 +386,50 @@ class Simulator:
             }
             await client.post(
                 f"{self.base_url}/trainings/{training_id}/complete", json=payload
+            )
+            return
+
+        if action == "travel_request":
+            if not self._employees:
+                return
+            payload = {
+                "employee_id": random.choice(self._employees),
+                "destination": random.choice(["Singapore", "Tokyo", "Berlin"]),
+                "days": random.randint(1, 4),
+                "reason": random.choice(["client_visit", "conference", "training"]),
+            }
+            response = await client.post(
+                f"{self.base_url}/travel/requests", json=payload
+            )
+            if response.status_code == 200:
+                request_id = response.json().get("id")
+                if isinstance(request_id, int):
+                    setattr(self, "_last_travel_id", request_id)
+            return
+
+        if action == "travel_decision":
+            request_id = getattr(self, "_last_travel_id", None)
+            if not request_id:
+                return
+            payload = {
+                "approved": random.choice([True, False]),
+                "approver": random.choice(["manager_1", "director_1"]),
+            }
+            await client.post(
+                f"{self.base_url}/travel/requests/{request_id}/decision", json=payload
+            )
+            return
+
+        if action == "travel_review":
+            request_id = getattr(self, "_last_travel_id", None)
+            if not request_id:
+                return
+            payload = {
+                "verified": random.choice([True, False]),
+                "reviewer": random.choice(["finance_1", "hr_ops"]),
+            }
+            await client.post(
+                f"{self.base_url}/travel/requests/{request_id}/review", json=payload
             )
             return
 

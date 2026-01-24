@@ -37,6 +37,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 uvicorn app.main:app --reload
 - `POST /payroll/run` simulate payroll run
 - `POST /leave/requests` create leave request
 - `POST /leave/requests/{id}/decision` approve/reject leave
+- `POST /leave/requests/{id}/review` review leave request
 - `POST /performance/reviews` create performance review
 - `POST /performance/reviews/{id}/decision` finalize review
 - `POST /salary/adjustments` request salary adjustment
@@ -51,6 +52,9 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 uvicorn app.main:app --reload
 - `POST /trainings/{id}/enroll` enroll employee
 - `POST /trainings/{id}/exam` submit training exam
 - `POST /trainings/{id}/complete` complete training (requires exam pass)
+- `POST /travel/requests` create travel request
+- `POST /travel/requests/{id}/decision` approve/reject travel
+- `POST /travel/requests/{id}/review` review travel request
 
 ## Public access without domain (self-signed TLS)
 

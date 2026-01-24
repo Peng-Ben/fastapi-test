@@ -37,6 +37,9 @@ leave_requests = meter.create_counter(
 leave_approvals = meter.create_counter(
     "leave_approvals_total", description="Leave approvals"
 )
+leave_reviews = meter.create_counter(
+    "leave_reviews_total", description="Leave reviews"
+)
 performance_reviews = meter.create_counter(
     "performance_reviews_total", description="Performance reviews created"
 )
@@ -76,6 +79,15 @@ training_exams = meter.create_counter(
 training_exam_results = meter.create_counter(
     "training_exam_results_total", description="Training exam results"
 )
+travel_requests = meter.create_counter(
+    "travel_requests_total", description="Travel requests created"
+)
+travel_approvals = meter.create_counter(
+    "travel_approvals_total", description="Travel approvals"
+)
+travel_reviews = meter.create_counter(
+    "travel_reviews_total", description="Travel reviews"
+)
 
 
 class DepartmentCreate(BaseModel):
@@ -106,6 +118,11 @@ class LeaveRequestCreate(BaseModel):
 class LeaveDecisionPayload(BaseModel):
     approved: bool
     approver: str
+
+
+class LeaveReviewPayload(BaseModel):
+    verified: bool
+    reviewer: str
 
 
 class ReviewCreatePayload(BaseModel):
@@ -200,6 +217,23 @@ class TrainingExamPayload(BaseModel):
     score: int
 
 
+class TravelRequestCreatePayload(BaseModel):
+    employee_id: int
+    destination: str
+    days: int
+    reason: str | None = None
+
+
+class TravelDecisionPayload(BaseModel):
+    approved: bool
+    approver: str
+
+
+class TravelReviewPayload(BaseModel):
+    verified: bool
+    reviewer: str
+
+
 def create_app() -> FastAPI:
     setup_logging()
     setup_telemetry(SERVICE_NAME)
@@ -211,6 +245,7 @@ def create_app() -> FastAPI:
     app.state.employees = {}
     app.state.attendance = []
     app.state.leave_requests = {}
+    app.state.travel_requests = {}
     app.state.performance_reviews = {}
     app.state.salary_adjustments = {}
     app.state.onboarding_cases = {}
@@ -219,6 +254,7 @@ def create_app() -> FastAPI:
     app.state.next_department_id = 1
     app.state.next_employee_id = 1000
     app.state.next_leave_id = 1
+    app.state.next_travel_id = 1
     app.state.next_review_id = 1
     app.state.next_salary_id = 1
     app.state.next_onboarding_id = 1
@@ -680,6 +716,81 @@ def create_app() -> FastAPI:
         )
         return training
 
+    @app.post("/travel/requests")
+    async def create_travel_request(
+        payload: TravelRequestCreatePayload,
+    ) -> dict[str, int | str]:
+        if payload.employee_id not in app.state.employees:
+            raise HTTPException(status_code=404, detail="employee not found")
+        if payload.days <= 0:
+            raise HTTPException(status_code=400, detail="invalid travel days")
+        if not payload.destination.strip():
+            raise HTTPException(status_code=400, detail="invalid destination")
+        request_id = app.state.next_travel_id
+        app.state.next_travel_id += 1
+        record = {
+            "id": request_id,
+            "employee_id": payload.employee_id,
+            "destination": payload.destination,
+            "days": payload.days,
+            "reason": payload.reason,
+            "status": "pending",
+            "approver": None,
+            "reviewer": None,
+            "created_at": time.time(),
+        }
+        app.state.travel_requests[request_id] = record
+        travel_requests.add(1, {"destination": payload.destination})
+        logger.info(
+            "travel request created id=%s employee_id=%s destination=%s",
+            request_id,
+            payload.employee_id,
+            payload.destination,
+        )
+        return record
+
+    @app.post("/travel/requests/{request_id}/decision")
+    async def decide_travel(
+        request_id: int, payload: TravelDecisionPayload
+    ) -> dict[str, int | str]:
+        record = app.state.travel_requests.get(request_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="travel request not found")
+        if record["status"] != "pending":
+            raise HTTPException(status_code=409, detail="travel request already decided")
+        status = "approved" if payload.approved else "rejected"
+        record["status"] = status
+        record["approver"] = payload.approver
+        record["decided_at"] = time.time()
+        travel_approvals.add(1, {"status": status})
+        logger.info(
+            "travel request %s id=%s approver=%s", status, request_id, payload.approver
+        )
+        return record
+
+    @app.post("/travel/requests/{request_id}/review")
+    async def review_travel(
+        request_id: int, payload: TravelReviewPayload
+    ) -> dict[str, int | str]:
+        record = app.state.travel_requests.get(request_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="travel request not found")
+        if record["status"] != "approved":
+            raise HTTPException(status_code=409, detail="travel request not approved")
+        if record.get("reviewed_at"):
+            raise HTTPException(status_code=409, detail="travel request already reviewed")
+        record["reviewed_at"] = time.time()
+        record["reviewer"] = payload.reviewer
+        record["review_status"] = "verified" if payload.verified else "recheck"
+        travel_reviews.add(1, {"review_status": record["review_status"]})
+        logger.info(
+            "travel review id=%s status=%s reviewer=%s",
+            request_id,
+            record["review_status"],
+            payload.reviewer,
+        )
+        return record
+
     @app.post("/employees/{employee_id}/attendance")
     async def checkin(employee_id: int, payload: AttendancePayload) -> dict[str, str]:
         employee = app.state.employees.get(employee_id)
@@ -742,6 +853,27 @@ def create_app() -> FastAPI:
         record["decided_at"] = time.time()
         leave_approvals.add(1, {"status": status})
         logger.info("leave request %s id=%s approver=%s", status, leave_id, payload.approver)
+        return record
+
+    @app.post("/leave/requests/{leave_id}/review")
+    async def review_leave(leave_id: int, payload: LeaveReviewPayload) -> dict[str, int | str]:
+        record = app.state.leave_requests.get(leave_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="leave request not found")
+        if record["status"] != "approved":
+            raise HTTPException(status_code=409, detail="leave request not approved")
+        if record.get("reviewed_at"):
+            raise HTTPException(status_code=409, detail="leave request already reviewed")
+        record["reviewed_at"] = time.time()
+        record["reviewer"] = payload.reviewer
+        record["review_status"] = "verified" if payload.verified else "recheck"
+        leave_reviews.add(1, {"review_status": record["review_status"]})
+        logger.info(
+            "leave review id=%s status=%s reviewer=%s",
+            leave_id,
+            record["review_status"],
+            payload.reviewer,
+        )
         return record
 
     @app.post("/performance/reviews")
