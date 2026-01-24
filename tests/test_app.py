@@ -330,3 +330,32 @@ def test_attendance_anomaly_flow() -> None:
     assert resolve.status_code == 200
     stats = client.get("/attendance/stats")
     assert stats.status_code == 200
+
+
+def test_asset_management_flow() -> None:
+    dept = client.post("/departments", json={"name": "IT"})
+    employee = client.post(
+        "/employees",
+        json={"name": "Riley", "department_id": dept.json()["id"], "title": "IT"},
+    )
+    asset = client.post(
+        "/assets",
+        json={"asset_type": "laptop", "serial_number": "SN-12345", "model": "M2"},
+    )
+    assert asset.status_code == 200
+    asset_id = asset.json()["id"]
+    assign = client.post(
+        f"/assets/{asset_id}/assign",
+        json={"employee_id": employee.json()["id"], "note": "new_hire"},
+    )
+    assert assign.status_code == 200
+    returned = client.post(
+        f"/assets/{asset_id}/return",
+        json={"condition": "good", "note": "ok"},
+    )
+    assert returned.status_code == 200
+    retired = client.post(
+        f"/assets/{asset_id}/retire",
+        json={"reason": "obsolete"},
+    )
+    assert retired.status_code == 200

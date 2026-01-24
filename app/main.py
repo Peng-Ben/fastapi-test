@@ -37,6 +37,15 @@ attendance_resolutions = meter.create_counter(
 attendance_stats_requests = meter.create_counter(
     "attendance_stats_requests_total", description="Attendance stats requests"
 )
+asset_assignments = meter.create_counter(
+    "asset_assignments_total", description="Asset assignments"
+)
+asset_returns = meter.create_counter(
+    "asset_returns_total", description="Asset returns"
+)
+asset_retirements = meter.create_counter(
+    "asset_retirements_total", description="Asset retirements"
+)
 payroll_runs = meter.create_counter(
     "payroll_runs_total", description="Payroll runs"
 )
@@ -254,6 +263,26 @@ class AttendanceAnomalyResolvePayload(BaseModel):
     resolution: str
 
 
+class AssetCreatePayload(BaseModel):
+    asset_type: str
+    serial_number: str
+    model: str | None = None
+
+
+class AssetAssignPayload(BaseModel):
+    employee_id: int
+    note: str | None = None
+
+
+class AssetReturnPayload(BaseModel):
+    condition: str
+    note: str | None = None
+
+
+class AssetRetirePayload(BaseModel):
+    reason: str
+
+
 def create_app() -> FastAPI:
     setup_logging()
     setup_telemetry(SERVICE_NAME)
@@ -265,6 +294,7 @@ def create_app() -> FastAPI:
     app.state.employees = {}
     app.state.attendance = []
     app.state.attendance_anomalies = {}
+    app.state.assets = {}
     app.state.leave_requests = {}
     app.state.travel_requests = {}
     app.state.performance_reviews = {}
@@ -282,6 +312,7 @@ def create_app() -> FastAPI:
     app.state.next_offboarding_id = 1
     app.state.next_training_id = 1
     app.state.next_anomaly_id = 1
+    app.state.next_asset_id = 1
 
     @app.middleware("http")
     async def metrics_middleware(request: Request, call_next):
@@ -905,6 +936,98 @@ def create_app() -> FastAPI:
             "open_anomalies": open_anomalies,
             "resolved_anomalies": resolved_anomalies,
         }
+
+    @app.post("/assets")
+    async def create_asset(payload: AssetCreatePayload) -> dict[str, int | str | None]:
+        asset_type = payload.asset_type.strip().lower()
+        if asset_type not in {"laptop", "desktop", "phone"}:
+            raise HTTPException(status_code=400, detail="invalid asset type")
+        if not payload.serial_number.strip():
+            raise HTTPException(status_code=400, detail="invalid serial number")
+        asset_id = app.state.next_asset_id
+        app.state.next_asset_id += 1
+        record = {
+            "id": asset_id,
+            "asset_type": asset_type,
+            "serial_number": payload.serial_number,
+            "model": payload.model,
+            "status": "available",
+            "assigned_to": None,
+            "history": [],
+        }
+        app.state.assets[asset_id] = record
+        logger.info("asset created id=%s type=%s", asset_id, asset_type)
+        return record
+
+    @app.post("/assets/{asset_id}/assign")
+    async def assign_asset(
+        asset_id: int, payload: AssetAssignPayload
+    ) -> dict[str, int | str | None | list]:
+        asset = app.state.assets.get(asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="asset not found")
+        if asset["status"] != "available":
+            raise HTTPException(status_code=409, detail="asset not available")
+        if payload.employee_id not in app.state.employees:
+            raise HTTPException(status_code=404, detail="employee not found")
+        asset["status"] = "assigned"
+        asset["assigned_to"] = payload.employee_id
+        asset["history"].append(
+            {
+                "action": "assigned",
+                "employee_id": payload.employee_id,
+                "note": payload.note,
+                "at": time.time(),
+            }
+        )
+        asset_assignments.add(1, {"asset_type": asset["asset_type"]})
+        logger.info(
+            "asset assigned id=%s employee_id=%s", asset_id, payload.employee_id
+        )
+        return asset
+
+    @app.post("/assets/{asset_id}/return")
+    async def return_asset(
+        asset_id: int, payload: AssetReturnPayload
+    ) -> dict[str, int | str | None | list]:
+        asset = app.state.assets.get(asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="asset not found")
+        if asset["status"] != "assigned":
+            raise HTTPException(status_code=409, detail="asset not assigned")
+        asset["status"] = "available"
+        asset["history"].append(
+            {
+                "action": "returned",
+                "employee_id": asset["assigned_to"],
+                "condition": payload.condition,
+                "note": payload.note,
+                "at": time.time(),
+            }
+        )
+        asset["assigned_to"] = None
+        asset_returns.add(1, {"condition": payload.condition})
+        logger.info("asset returned id=%s condition=%s", asset_id, payload.condition)
+        return asset
+
+    @app.post("/assets/{asset_id}/retire")
+    async def retire_asset(
+        asset_id: int, payload: AssetRetirePayload
+    ) -> dict[str, int | str | None | list]:
+        asset = app.state.assets.get(asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="asset not found")
+        if asset["status"] == "retired":
+            raise HTTPException(status_code=409, detail="asset already retired")
+        if asset["status"] == "assigned":
+            raise HTTPException(status_code=409, detail="asset assigned to employee")
+        asset["status"] = "retired"
+        asset["history"].append(
+            {"action": "retired", "reason": payload.reason, "at": time.time()}
+        )
+        asset_retirements.add(1, {"asset_type": asset["asset_type"]})
+        logger.info("asset retired id=%s reason=%s", asset_id, payload.reason)
+        return asset
 
     @app.post("/payroll/run")
     async def run_payroll(payload: PayrollRunPayload) -> dict[str, int | str]:

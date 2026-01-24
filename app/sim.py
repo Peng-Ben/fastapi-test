@@ -41,6 +41,10 @@ class Simulator:
             "attendance_anomaly",
             "attendance_stats",
             "attendance_anomaly_resolve",
+            "asset_create",
+            "asset_assign",
+            "asset_return",
+            "asset_retire",
             "payroll",
             "leave_request",
             "leave_decision",
@@ -143,6 +147,49 @@ class Simulator:
 
         if action == "attendance_stats":
             await client.get(f"{self.base_url}/attendance/stats")
+            return
+
+        if action == "asset_create":
+            payload = {
+                "asset_type": random.choice(["laptop", "desktop", "phone"]),
+                "serial_number": f"SN-{random.randint(10000, 99999)}",
+                "model": random.choice(["M2", "XPS", "Pixel"]),
+            }
+            response = await client.post(f"{self.base_url}/assets", json=payload)
+            if response.status_code == 200:
+                asset_id = response.json().get("id")
+                if isinstance(asset_id, int):
+                    setattr(self, "_last_asset_id", asset_id)
+            return
+
+        if action == "asset_assign":
+            asset_id = getattr(self, "_last_asset_id", None)
+            if not asset_id or not self._employees:
+                return
+            payload = {
+                "employee_id": random.choice(self._employees),
+                "note": random.choice(["new_hire", "replacement"]),
+            }
+            await client.post(f"{self.base_url}/assets/{asset_id}/assign", json=payload)
+            return
+
+        if action == "asset_return":
+            asset_id = getattr(self, "_last_asset_id", None)
+            if not asset_id:
+                return
+            payload = {
+                "condition": random.choice(["good", "scratched", "damaged"]),
+                "note": random.choice(["ok", "needs_fix"]),
+            }
+            await client.post(f"{self.base_url}/assets/{asset_id}/return", json=payload)
+            return
+
+        if action == "asset_retire":
+            asset_id = getattr(self, "_last_asset_id", None)
+            if not asset_id:
+                return
+            payload = {"reason": random.choice(["obsolete", "broken"])}
+            await client.post(f"{self.base_url}/assets/{asset_id}/retire", json=payload)
             return
 
         if action == "leave_request":
