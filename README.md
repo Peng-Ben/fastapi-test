@@ -44,6 +44,10 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 uvicorn app.main:app --reload
 - `POST /departments/merge` merge departments
 - `POST /employees/{id}/transfer` transfer department
 - `POST /employees/{id}/promotion` promote employee
+- `POST /promotions/requests` create promotion request
+- `POST /promotions/requests/{id}/decision` approve/reject promotion
+- `POST /promotions/requests/{id}/finalize` finalize promotion
+- `GET /promotions/requests/{id}` get promotion request
 - `POST /payroll/run` simulate payroll run
 - `POST /leave/requests` create leave request
 - `POST /leave/requests/{id}/decision` approve/reject leave

@@ -77,6 +77,15 @@ performance_decisions = meter.create_counter(
 promotions = meter.create_counter(
     "employee_promotions_total", description="Employee promotions"
 )
+promotion_requests = meter.create_counter(
+    "promotion_requests_total", description="Promotion requests"
+)
+promotion_decisions = meter.create_counter(
+    "promotion_decisions_total", description="Promotion decisions"
+)
+promotion_finalizations = meter.create_counter(
+    "promotion_finalizations_total", description="Promotion finalizations"
+)
 salary_requests = meter.create_counter(
     "salary_adjust_requests_total", description="Salary adjustment requests"
 )
@@ -182,6 +191,22 @@ class PromotionPayload(BaseModel):
     new_title: str
     effective_date: str
     reason: str | None = None
+
+
+class PromotionRequestPayload(BaseModel):
+    employee_id: int
+    new_title: str
+    effective_date: str
+    reason: str | None = None
+
+
+class PromotionDecisionPayload(BaseModel):
+    approved: bool
+    approver: str
+
+
+class PromotionFinalizePayload(BaseModel):
+    hr_reviewer: str
 
 
 class SalaryAdjustRequestPayload(BaseModel):
@@ -338,6 +363,8 @@ def create_app() -> FastAPI:
     app.state.trainings = {}
     app.state.next_department_id = 1
     app.state.next_employee_id = 1000
+    app.state.promotion_requests = {}
+    app.state.next_promotion_id = 1
     app.state.next_leave_id = 1
     app.state.next_travel_id = 1
     app.state.next_review_id = 1
@@ -486,6 +513,107 @@ def create_app() -> FastAPI:
             payload.effective_date,
         )
         return employee
+
+    @app.post("/promotions/requests")
+    async def create_promotion_request(
+        payload: PromotionRequestPayload,
+    ) -> dict[str, int | str | list]:
+        employee = app.state.employees.get(payload.employee_id)
+        if not employee:
+            raise HTTPException(status_code=404, detail="employee not found")
+        if not payload.new_title.strip():
+            raise HTTPException(status_code=400, detail="invalid title")
+        if not payload.effective_date or len(payload.effective_date) != 10:
+            raise HTTPException(status_code=400, detail="invalid effective date")
+        request_id = app.state.next_promotion_id
+        app.state.next_promotion_id += 1
+        record = {
+            "id": request_id,
+            "employee_id": payload.employee_id,
+            "from_title": employee["title"],
+            "to_title": payload.new_title,
+            "effective_date": payload.effective_date,
+            "reason": payload.reason,
+            "status": "pending",
+            "approver": None,
+            "hr_reviewer": None,
+            "history": [
+                {
+                    "action": "created",
+                    "at": time.time(),
+                }
+            ],
+        }
+        app.state.promotion_requests[request_id] = record
+        promotion_requests.add(1, {"department_id": str(employee["department_id"])})
+        logger.info(
+            "promotion request created id=%s employee_id=%s to_title=%s",
+            request_id,
+            payload.employee_id,
+            payload.new_title,
+        )
+        return record
+
+    @app.post("/promotions/requests/{request_id}/decision")
+    async def decide_promotion_request(
+        request_id: int, payload: PromotionDecisionPayload
+    ) -> dict[str, int | str | list]:
+        record = app.state.promotion_requests.get(request_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="promotion request not found")
+        if record["status"] != "pending":
+            raise HTTPException(status_code=409, detail="promotion request already decided")
+        status = "approved" if payload.approved else "rejected"
+        record["status"] = status
+        record["approver"] = payload.approver
+        record["history"].append(
+            {"action": "decision", "status": status, "at": time.time()}
+        )
+        promotion_decisions.add(1, {"status": status})
+        logger.info(
+            "promotion request %s id=%s approver=%s",
+            status,
+            request_id,
+            payload.approver,
+        )
+        return record
+
+    @app.post("/promotions/requests/{request_id}/finalize")
+    async def finalize_promotion_request(
+        request_id: int, payload: PromotionFinalizePayload
+    ) -> dict[str, int | str | list]:
+        record = app.state.promotion_requests.get(request_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="promotion request not found")
+        if record["status"] != "approved":
+            raise HTTPException(status_code=409, detail="promotion not approved")
+        if record["hr_reviewer"]:
+            raise HTTPException(status_code=409, detail="promotion already finalized")
+        employee = app.state.employees.get(record["employee_id"])
+        if not employee:
+            raise HTTPException(status_code=404, detail="employee not found")
+        employee["title"] = record["to_title"]
+        record["hr_reviewer"] = payload.hr_reviewer
+        record["history"].append(
+            {"action": "finalized", "at": time.time(), "reviewer": payload.hr_reviewer}
+        )
+        promotion_finalizations.add(1, {"department_id": str(employee["department_id"])})
+        logger.info(
+            "promotion finalized id=%s employee_id=%s reviewer=%s",
+            request_id,
+            record["employee_id"],
+            payload.hr_reviewer,
+        )
+        return record
+
+    @app.get("/promotions/requests/{request_id}")
+    async def get_promotion_request(
+        request_id: int,
+    ) -> dict[str, int | str | list]:
+        record = app.state.promotion_requests.get(request_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="promotion request not found")
+        return record
 
     @app.post("/salary/adjustments")
     async def create_salary_adjustment(

@@ -56,6 +56,9 @@ class Simulator:
             "review_decision",
             "department_transfer",
             "promotion",
+            "promotion_request",
+            "promotion_decision",
+            "promotion_finalize",
             "salary_request",
             "salary_decision",
             "onboarding_case",
@@ -331,6 +334,49 @@ class Simulator:
             }
             await client.post(
                 f"{self.base_url}/employees/{employee_id}/promotion", json=payload
+            )
+            return
+
+        if action == "promotion_request":
+            if not self._employees:
+                return
+            payload = {
+                "employee_id": random.choice(self._employees),
+                "new_title": random.choice(["Senior Engineer", "Lead", "Manager"]),
+                "effective_date": random.choice(["2026-02-01", "2026-03-01"]),
+                "reason": random.choice(["performance", "growth"]),
+            }
+            response = await client.post(
+                f"{self.base_url}/promotions/requests", json=payload
+            )
+            if response.status_code == 200:
+                request_id = response.json().get("id")
+                if isinstance(request_id, int):
+                    setattr(self, "_last_promotion_id", request_id)
+            return
+
+        if action == "promotion_decision":
+            request_id = getattr(self, "_last_promotion_id", None)
+            if not request_id:
+                return
+            payload = {
+                "approved": random.choice([True, False]),
+                "approver": random.choice(["manager_1", "director_1"]),
+            }
+            await client.post(
+                f"{self.base_url}/promotions/requests/{request_id}/decision",
+                json=payload,
+            )
+            return
+
+        if action == "promotion_finalize":
+            request_id = getattr(self, "_last_promotion_id", None)
+            if not request_id:
+                return
+            payload = {"hr_reviewer": random.choice(["hr_lead", "hr_ops"])}
+            await client.post(
+                f"{self.base_url}/promotions/requests/{request_id}/finalize",
+                json=payload,
             )
             return
 
