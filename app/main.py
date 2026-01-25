@@ -399,7 +399,7 @@ def create_app() -> FastAPI:
 
     @app.get("/")
     async def health() -> dict[str, str]:
-        return {"status": "ok", "service": SERVICE_NAME}
+        return {"status": "ok", "service": SERVICE_NAME, "version": "1.1.0"}
 
     @app.post("/departments")
     async def create_department(payload: DepartmentCreate) -> dict[str, int | str]:

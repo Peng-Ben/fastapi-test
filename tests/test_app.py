@@ -16,6 +16,7 @@ def test_health() -> None:
     response = client.get("/")
     assert response.status_code == 200
     assert response.json()["service"] == "logpulse"
+    assert response.json()["version"] == "1.1.0"
 
 
 def test_department_and_employee_flow() -> None:
