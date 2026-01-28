@@ -166,6 +166,7 @@ docker compose logs --tail=50 elasticsearch
 
 ## 11. ES‑King 连接参数
 
+
 - 连接地址：`https://<PUBLIC_IP>/es`
 - 用户名：`admin`
 - 密码：htpasswd 中设置的密码
