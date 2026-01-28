@@ -162,7 +162,6 @@ docker exec -it logpulse-nginx sh -c "wget -qO- http://elasticsearch:9200 | head
 ```bash
 docker compose logs --tail=50 elasticsearch
 ```
-
 ---
 
 ## 11. ES‑King 连接参数
