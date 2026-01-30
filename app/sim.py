@@ -74,6 +74,11 @@ class Simulator:
             "travel_request",
             "travel_decision",
             "travel_review",
+            "expense_create",
+            "expense_approve",
+            "expense_reject",
+            "expense_verify",
+            "expense_pay",
         ]
         async with httpx.AsyncClient(timeout=5.0) as client:
             while True:
@@ -603,6 +608,68 @@ class Simulator:
             await client.post(
                 f"{self.base_url}/travel/requests/{request_id}/review", json=payload
             )
+            return
+
+        if action == "expense_create":
+            if not self._employees:
+                return
+            items = [
+                {
+                    "category": random.choice(["transport", "food", "hotel", "supplies"]),
+                    "amount": round(random.uniform(50, 500), 2),
+                    "description": random.choice(["taxi", "lunch", "hotel", "office"]),
+                }
+                for _ in range(random.randint(1, 3))
+            ]
+            payload = {
+                "employee_id": random.choice(self._employees),
+                "expense_type": random.choice(["travel", "office_supplies", "meals", "transportation"]),
+                "items": items,
+                "description": random.choice(["business trip", "client meeting", "office supplies"]),
+            }
+            response = await client.post(f"{self.base_url}/expenses", json=payload)
+            if response.status_code == 200:
+                expense_id = response.json().get("id")
+                if isinstance(expense_id, int):
+                    setattr(self, "_last_expense_id", expense_id)
+            return
+
+        if action == "expense_approve":
+            expense_id = getattr(self, "_last_expense_id", None)
+            if not expense_id:
+                return
+            payload = {"approver": random.choice(["supervisor_1", "manager_1", "director_1"])}
+            await client.post(f"{self.base_url}/expenses/{expense_id}/approve", json=payload)
+            return
+
+        if action == "expense_reject":
+            expense_id = getattr(self, "_last_expense_id", None)
+            if not expense_id:
+                return
+            payload = {
+                "approver": random.choice(["supervisor_1", "manager_1"]),
+                "reason": random.choice(["insufficient_docs", "budget_exceeded", "policy_violation"]),
+            }
+            await client.post(f"{self.base_url}/expenses/{expense_id}/reject", json=payload)
+            return
+
+        if action == "expense_verify":
+            expense_id = getattr(self, "_last_expense_id", None)
+            if not expense_id:
+                return
+            payload = {"verifier": random.choice(["finance_1", "finance_2"])}
+            await client.post(f"{self.base_url}/expenses/{expense_id}/verify", json=payload)
+            return
+
+        if action == "expense_pay":
+            expense_id = getattr(self, "_last_expense_id", None)
+            if not expense_id:
+                return
+            payload = {
+                "payer": random.choice(["finance_1", "finance_2"]),
+                "payment_ref": f"PAY-{random.randint(10000, 99999)}",
+            }
+            await client.post(f"{self.base_url}/expenses/{expense_id}/pay", json=payload)
             return
 
         payload = {"month": random.choice(["2025-12", "2026-01"])}

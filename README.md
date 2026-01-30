@@ -74,6 +74,13 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 uvicorn app.main:app --reload
 - `POST /travel/requests` create travel request
 - `POST /travel/requests/{id}/decision` approve/reject travel
 - `POST /travel/requests/{id}/review` review travel request
+- `POST /expenses` create expense request
+- `GET /expenses/{id}` get expense details
+- `GET /expenses` list expenses (filter: status, employee_id)
+- `POST /expenses/{id}/approve` approve expense
+- `POST /expenses/{id}/reject` reject expense
+- `POST /expenses/{id}/verify` finance verify expense
+- `POST /expenses/{id}/pay` finance pay expense
 
 ## Public access without domain (self-signed TLS)
 

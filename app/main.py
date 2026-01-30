@@ -140,6 +140,18 @@ travel_approvals = meter.create_counter(
 travel_reviews = meter.create_counter(
     "travel_reviews_total", description="Travel reviews"
 )
+expense_requests = meter.create_counter(
+    "expense_requests_total", description="Expense requests created"
+)
+expense_approvals = meter.create_counter(
+    "expense_approvals_total", description="Expense approvals"
+)
+expense_verifications = meter.create_counter(
+    "expense_verifications_total", description="Expense verifications"
+)
+expense_payments = meter.create_counter(
+    "expense_payments_total", description="Expense payments"
+)
 
 
 def format_ts(ts: float) -> str:
@@ -372,6 +384,37 @@ class HealthDeclarationPayload(BaseModel):
     note: str | None = None
 
 
+class ExpenseItemPayload(BaseModel):
+    category: str
+    amount: float
+    description: str | None = None
+
+
+class ExpenseCreatePayload(BaseModel):
+    employee_id: int
+    expense_type: str
+    items: list[ExpenseItemPayload]
+    description: str | None = None
+
+
+class ExpenseApprovePayload(BaseModel):
+    approver: str
+
+
+class ExpenseRejectPayload(BaseModel):
+    approver: str
+    reason: str
+
+
+class ExpenseVerifyPayload(BaseModel):
+    verifier: str
+
+
+class ExpensePayPayload(BaseModel):
+    payer: str
+    payment_ref: str | None = None
+
+
 def create_app() -> FastAPI:
     setup_logging()
     setup_telemetry(SERVICE_NAME)
@@ -408,6 +451,8 @@ def create_app() -> FastAPI:
     app.state.next_training_id = 1
     app.state.next_anomaly_id = 1
     app.state.next_asset_id = 1
+    app.state.expenses = {}
+    app.state.next_expense_id = 1
 
     @app.middleware("http")
     async def metrics_middleware(request: Request, call_next):
@@ -1436,6 +1481,208 @@ def create_app() -> FastAPI:
             risk,
         )
         return {"status": "ok"}
+
+    def _calculate_expense_approval_level(total_amount: float) -> str:
+        if total_amount <= 500:
+            return "supervisor"
+        elif total_amount <= 2000:
+            return "manager"
+        else:
+            return "director"
+
+    @app.post("/expenses")
+    async def create_expense(
+        payload: ExpenseCreatePayload,
+    ) -> dict[str, int | str | float | list | None]:
+        if payload.employee_id not in app.state.employees:
+            raise HTTPException(status_code=404, detail="employee not found")
+        expense_type = payload.expense_type.strip().lower()
+        if expense_type not in {"travel", "office_supplies", "meals", "transportation", "other"}:
+            raise HTTPException(status_code=400, detail="invalid expense type")
+        if not payload.items:
+            raise HTTPException(status_code=400, detail="no expense items")
+        items = []
+        total_amount = 0.0
+        for item in payload.items:
+            if item.amount <= 0:
+                raise HTTPException(status_code=400, detail="invalid item amount")
+            category = item.category.strip().lower()
+            items.append({
+                "category": category,
+                "amount": item.amount,
+                "description": item.description,
+            })
+            total_amount += item.amount
+        total_amount = round(total_amount, 2)
+        required_level = _calculate_expense_approval_level(total_amount)
+        expense_id = app.state.next_expense_id
+        app.state.next_expense_id += 1
+        created_at = time.time()
+        record = {
+            "id": expense_id,
+            "employee_id": payload.employee_id,
+            "expense_type": expense_type,
+            "items": items,
+            "total_amount": total_amount,
+            "description": payload.description,
+            "status": "pending",
+            "required_level": required_level,
+            "approver": None,
+            "verifier": None,
+            "payer": None,
+            "reject_reason": None,
+            "payment_ref": None,
+            "created_at": created_at,
+            "history": [{"action": "created", "at": created_at}],
+        }
+        app.state.expenses[expense_id] = record
+        expense_requests.add(1, {"expense_type": expense_type, "required_level": required_level})
+        logger.info(
+            "expense created id=%s employee_id=%s amount=%.2f level=%s at=%s",
+            expense_id,
+            payload.employee_id,
+            total_amount,
+            required_level,
+            format_ts(created_at),
+        )
+        return record
+
+    @app.get("/expenses/{expense_id}")
+    async def get_expense(expense_id: int) -> dict[str, int | str | float | list | None]:
+        record = app.state.expenses.get(expense_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="expense not found")
+        return record
+
+    @app.get("/expenses")
+    async def list_expenses(
+        status: str | None = None,
+        employee_id: int | None = None,
+    ) -> dict[str, list]:
+        items = list(app.state.expenses.values())
+        if status:
+            items = [r for r in items if r["status"] == status.lower()]
+        if employee_id is not None:
+            items = [r for r in items if r["employee_id"] == employee_id]
+        return {"items": items}
+
+    @app.post("/expenses/{expense_id}/approve")
+    async def approve_expense(
+        expense_id: int, payload: ExpenseApprovePayload
+    ) -> dict[str, int | str | float | list | None]:
+        record = app.state.expenses.get(expense_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="expense not found")
+        if record["status"] != "pending":
+            raise HTTPException(status_code=409, detail="expense not pending")
+        if not payload.approver.strip():
+            raise HTTPException(status_code=400, detail="invalid approver")
+        record["status"] = "approved"
+        record["approver"] = payload.approver
+        approved_at = time.time()
+        record["history"].append({
+            "action": "approved",
+            "approver": payload.approver,
+            "at": approved_at,
+        })
+        expense_approvals.add(1, {"status": "approved"})
+        logger.info(
+            "expense approved id=%s approver=%s at=%s",
+            expense_id,
+            payload.approver,
+            format_ts(approved_at),
+        )
+        return record
+
+    @app.post("/expenses/{expense_id}/reject")
+    async def reject_expense(
+        expense_id: int, payload: ExpenseRejectPayload
+    ) -> dict[str, int | str | float | list | None]:
+        record = app.state.expenses.get(expense_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="expense not found")
+        if record["status"] not in {"pending", "approved", "verified"}:
+            raise HTTPException(status_code=409, detail="expense cannot be rejected")
+        if not payload.approver.strip():
+            raise HTTPException(status_code=400, detail="invalid approver")
+        record["status"] = "rejected"
+        record["approver"] = payload.approver
+        record["reject_reason"] = payload.reason
+        rejected_at = time.time()
+        record["history"].append({
+            "action": "rejected",
+            "approver": payload.approver,
+            "reason": payload.reason,
+            "at": rejected_at,
+        })
+        expense_approvals.add(1, {"status": "rejected"})
+        logger.info(
+            "expense rejected id=%s approver=%s reason=%s at=%s",
+            expense_id,
+            payload.approver,
+            payload.reason,
+            format_ts(rejected_at),
+        )
+        return record
+
+    @app.post("/expenses/{expense_id}/verify")
+    async def verify_expense(
+        expense_id: int, payload: ExpenseVerifyPayload
+    ) -> dict[str, int | str | float | list | None]:
+        record = app.state.expenses.get(expense_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="expense not found")
+        if record["status"] != "approved":
+            raise HTTPException(status_code=409, detail="expense not approved")
+        if not payload.verifier.strip():
+            raise HTTPException(status_code=400, detail="invalid verifier")
+        record["status"] = "verified"
+        record["verifier"] = payload.verifier
+        verified_at = time.time()
+        record["history"].append({
+            "action": "verified",
+            "verifier": payload.verifier,
+            "at": verified_at,
+        })
+        expense_verifications.add(1, {})
+        logger.info(
+            "expense verified id=%s verifier=%s at=%s",
+            expense_id,
+            payload.verifier,
+            format_ts(verified_at),
+        )
+        return record
+
+    @app.post("/expenses/{expense_id}/pay")
+    async def pay_expense(
+        expense_id: int, payload: ExpensePayPayload
+    ) -> dict[str, int | str | float | list | None]:
+        record = app.state.expenses.get(expense_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="expense not found")
+        if record["status"] != "verified":
+            raise HTTPException(status_code=409, detail="expense not verified")
+        if not payload.payer.strip():
+            raise HTTPException(status_code=400, detail="invalid payer")
+        record["status"] = "paid"
+        record["payer"] = payload.payer
+        record["payment_ref"] = payload.payment_ref
+        paid_at = time.time()
+        record["history"].append({
+            "action": "paid",
+            "payer": payload.payer,
+            "payment_ref": payload.payment_ref,
+            "at": paid_at,
+        })
+        expense_payments.add(1, {})
+        logger.info(
+            "expense paid id=%s payer=%s ref=%s at=%s",
+            expense_id,
+            payload.payer,
+            payload.payment_ref or "",
+            format_ts(paid_at),
+        )
+        return record
 
     @app.post("/payroll/run")
     async def run_payroll(payload: PayrollRunPayload) -> dict[str, int | str]:

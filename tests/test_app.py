@@ -541,3 +541,188 @@ def test_department_merge() -> None:
     )
     assert merge.status_code == 200
     assert employee.json()["id"] in merge.json()["moved_employees"]
+
+
+def test_expense_request_flow() -> None:
+    dept = client.post("/departments", json={"name": "ExpenseDept"})
+    employee = client.post(
+        "/employees",
+        json={"name": "Wendy", "department_id": dept.json()["id"], "title": "Analyst"},
+    )
+    expense = client.post(
+        "/expenses",
+        json={
+            "employee_id": employee.json()["id"],
+            "expense_type": "travel",
+            "items": [
+                {"category": "transport", "amount": 150.50, "description": "taxi"},
+                {"category": "meals", "amount": 80.00, "description": "lunch"},
+            ],
+            "description": "business trip",
+        },
+    )
+    assert expense.status_code == 200
+    expense_id = expense.json()["id"]
+    assert expense.json()["total_amount"] == 230.50
+    assert expense.json()["required_level"] == "supervisor"
+    assert expense.json()["status"] == "pending"
+
+    get_expense = client.get(f"/expenses/{expense_id}")
+    assert get_expense.status_code == 200
+
+    approve = client.post(
+        f"/expenses/{expense_id}/approve",
+        json={"approver": "supervisor_1"},
+    )
+    assert approve.status_code == 200
+    assert approve.json()["status"] == "approved"
+
+    verify = client.post(
+        f"/expenses/{expense_id}/verify",
+        json={"verifier": "finance_1"},
+    )
+    assert verify.status_code == 200
+    assert verify.json()["status"] == "verified"
+
+    pay = client.post(
+        f"/expenses/{expense_id}/pay",
+        json={"payer": "finance_2", "payment_ref": "PAY-12345"},
+    )
+    assert pay.status_code == 200
+    assert pay.json()["status"] == "paid"
+    assert pay.json()["payment_ref"] == "PAY-12345"
+
+
+def test_expense_rejection_flow() -> None:
+    dept = client.post("/departments", json={"name": "RejectDept"})
+    employee = client.post(
+        "/employees",
+        json={"name": "Xander", "department_id": dept.json()["id"], "title": "Engineer"},
+    )
+    expense = client.post(
+        "/expenses",
+        json={
+            "employee_id": employee.json()["id"],
+            "expense_type": "office_supplies",
+            "items": [{"category": "supplies", "amount": 50.00}],
+        },
+    )
+    expense_id = expense.json()["id"]
+    reject = client.post(
+        f"/expenses/{expense_id}/reject",
+        json={"approver": "manager_1", "reason": "insufficient_docs"},
+    )
+    assert reject.status_code == 200
+    assert reject.json()["status"] == "rejected"
+    assert reject.json()["reject_reason"] == "insufficient_docs"
+
+
+def test_expense_approval_level_calculation() -> None:
+    dept = client.post("/departments", json={"name": "LevelDept"})
+    employee = client.post(
+        "/employees",
+        json={"name": "Yara", "department_id": dept.json()["id"], "title": "Lead"},
+    )
+    expense_low = client.post(
+        "/expenses",
+        json={
+            "employee_id": employee.json()["id"],
+            "expense_type": "meals",
+            "items": [{"category": "food", "amount": 300.00}],
+        },
+    )
+    assert expense_low.json()["required_level"] == "supervisor"
+
+    expense_mid = client.post(
+        "/expenses",
+        json={
+            "employee_id": employee.json()["id"],
+            "expense_type": "travel",
+            "items": [{"category": "hotel", "amount": 1500.00}],
+        },
+    )
+    assert expense_mid.json()["required_level"] == "manager"
+
+    expense_high = client.post(
+        "/expenses",
+        json={
+            "employee_id": employee.json()["id"],
+            "expense_type": "travel",
+            "items": [{"category": "flight", "amount": 3000.00}],
+        },
+    )
+    assert expense_high.json()["required_level"] == "director"
+
+
+def test_expense_list_filter() -> None:
+    dept = client.post("/departments", json={"name": "FilterDept"})
+    employee = client.post(
+        "/employees",
+        json={"name": "Zara", "department_id": dept.json()["id"], "title": "PM"},
+    )
+    expense1 = client.post(
+        "/expenses",
+        json={
+            "employee_id": employee.json()["id"],
+            "expense_type": "transportation",
+            "items": [{"category": "taxi", "amount": 100.00}],
+        },
+    )
+    expense2 = client.post(
+        "/expenses",
+        json={
+            "employee_id": employee.json()["id"],
+            "expense_type": "meals",
+            "items": [{"category": "dinner", "amount": 200.00}],
+        },
+    )
+    client.post(
+        f"/expenses/{expense1.json()['id']}/approve",
+        json={"approver": "supervisor_1"},
+    )
+
+    all_expenses = client.get("/expenses")
+    assert all_expenses.status_code == 200
+    assert len(all_expenses.json()["items"]) >= 2
+
+    pending_expenses = client.get("/expenses?status=pending")
+    assert pending_expenses.status_code == 200
+    pending_ids = [e["id"] for e in pending_expenses.json()["items"]]
+    assert expense2.json()["id"] in pending_ids
+
+    employee_expenses = client.get(f"/expenses?employee_id={employee.json()['id']}")
+    assert employee_expenses.status_code == 200
+
+
+def test_expense_invalid_type() -> None:
+    dept = client.post("/departments", json={"name": "InvalidDept"})
+    employee = client.post(
+        "/employees",
+        json={"name": "Adam", "department_id": dept.json()["id"], "title": "Dev"},
+    )
+    response = client.post(
+        "/expenses",
+        json={
+            "employee_id": employee.json()["id"],
+            "expense_type": "invalid_type",
+            "items": [{"category": "test", "amount": 100.00}],
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_expense_empty_items() -> None:
+    dept = client.post("/departments", json={"name": "EmptyDept"})
+    employee = client.post(
+        "/employees",
+        json={"name": "Beth", "department_id": dept.json()["id"], "title": "Dev"},
+    )
+    response = client.post(
+        "/expenses",
+        json={
+            "employee_id": employee.json()["id"],
+            "expense_type": "travel",
+            "items": [],
+        },
+    )
+    assert response.status_code == 400
